@@ -1,0 +1,308 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'dart:math';
+import 'package:audio_session/audio_session.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:rxdart/rxdart.dart';
+
+final player = AudioPlayer();
+
+class JustPlayer extends StatefulWidget {
+  final String? url;
+
+  JustPlayer({@required this.url});
+
+  @override
+  State<StatefulWidget> createState() {
+    return _JustPlayerState(url! );
+  }
+}
+
+
+class _JustPlayerState extends State<JustPlayer> {
+  String? url;
+
+  _JustPlayerState(this.url);
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+  Future<void> _init() async {
+
+    final session = await AudioSession.instance;
+    await session.configure(AudioSessionConfiguration.speech());
+    //await player.setUrl('https://talkosaurusbucket.s3.us-east-2.amazonaws.com/63-talk-97.mp3');
+    await player.setUrl(url!);
+    player.durationStream.first.then((event) {
+      if(event != null){
+        int newevent;
+        newevent = event.inMilliseconds - 100;
+        player.setClip(start: Duration(milliseconds: 0), end: Duration(milliseconds: newevent));
+      }
+     }
+    );
+  }
+
+  @override
+  void dispose() {
+    player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return
+
+        Scaffold(
+          backgroundColor:Colors.transparent,
+            body: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ControlButtons(player),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.all(2.0),
+                    child: StreamBuilder<Duration?>(
+                      stream: player.durationStream,
+                      builder: (context, snapshot) {
+                        final duration = snapshot.data ?? Duration.zero;
+                        return StreamBuilder<PositionData>(
+                          stream: Rx.combineLatest2<Duration, Duration, PositionData>(
+                              player.positionStream,
+                              player.bufferedPositionStream,
+                                  (position, bufferedPosition) =>
+                                  PositionData(position, bufferedPosition)),
+                          builder: (context, snapshot) {
+                            final positionData = snapshot.data ??
+                                PositionData(Duration.zero, Duration.zero);
+                            var position = positionData.position;
+                            if (position > duration) {
+                              position = duration;
+                            }
+                            var bufferedPosition = positionData.bufferedPosition;
+                            if (bufferedPosition > duration) {
+                              bufferedPosition = duration;
+                            }
+                            return SeekBar(
+                              duration: duration,
+                              position: position,
+                              bufferedPosition: bufferedPosition,
+                              onChangeEnd: (newPosition) {
+                                player.seek(newPosition);
+                              },
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              // Text("$newAudioPlayerState")
+            ],
+          ),
+        );
+
+  }
+}
+
+
+
+class ControlButtons extends StatelessWidget {
+  final AudioPlayer player;
+
+  ControlButtons(this.player);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        StreamBuilder<PlayerState>(
+          stream: player.playerStateStream,
+          builder: (context, snapshot) {
+            final playerState = snapshot.data;
+            final processingState = playerState?.processingState;
+            final playing = playerState?.playing;
+            if (processingState == ProcessingState.loading ||
+                processingState == ProcessingState.buffering) {
+              return Container(
+                margin: EdgeInsets.all(8.0),
+                //width: 110.0,
+                //height: 110.0,
+                child: CircularProgressIndicator(),
+              );
+            } else if (playing != true) {
+              return IconButton(
+                icon: Icon(Icons.play_arrow, color: const Color(0xFF0E3311).withOpacity(0.25)),
+                iconSize: 110.0,
+                onPressed: player.play,
+              );
+            } else if (processingState != ProcessingState.completed) {
+              return IconButton(
+                icon: Icon(Icons.pause, color: const Color(0xFF0E3311).withOpacity(0.25)),
+                iconSize: 110.0,
+                onPressed: player.pause,
+              );
+            } else {
+              return IconButton(
+                icon: Icon(Icons.replay, color: const Color(0xFF0E3311).withOpacity(0.25)),
+                iconSize: 110.0,
+                onPressed: () => player.seek(Duration.zero,
+                    index: player.effectiveIndices!.first),
+              );
+            }
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class SeekBar extends StatefulWidget {
+  final Duration duration;
+  final Duration position;
+  final Duration bufferedPosition;
+  final ValueChanged<Duration>? onChanged;
+  final ValueChanged<Duration>? onChangeEnd;
+
+  SeekBar({
+    required this.duration,
+    required this.position,
+    required this.bufferedPosition,
+    this.onChanged,
+    this.onChangeEnd,
+  });
+
+  @override
+  _SeekBarState createState() => _SeekBarState();
+}
+
+class _SeekBarState extends State<SeekBar> {
+  double? _dragValue;
+  late SliderThemeData _sliderThemeData;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    _sliderThemeData = SliderTheme.of(context).copyWith(
+        trackHeight: 2.0
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 220,
+      height: 16,
+      child: Stack(
+        children: [
+          SliderTheme(
+            data: _sliderThemeData.copyWith(
+              thumbShape: HiddenThumbComponentShape(),
+              activeTrackColor: Colors.blue.shade100,
+              inactiveTrackColor: Colors.grey.shade300,
+            ),
+            child: ExcludeSemantics(
+              child: Slider(
+                min: 0.0,
+                max: widget.duration.inMilliseconds.toDouble(),
+                value: widget.bufferedPosition.inMilliseconds.toDouble(),
+                onChanged: (value) {
+                  setState(() {
+                    _dragValue = value;
+                  });
+                  if (widget.onChanged != null) {
+                    widget.onChanged!(Duration(milliseconds: value.round()));
+                  }
+                },
+                onChangeEnd: (value) {
+                  if (widget.onChangeEnd != null) {
+                    widget.onChangeEnd!(Duration(milliseconds: value.round()));
+                  }
+                  _dragValue = null;
+                },
+              ),
+            ),
+          ),
+          SliderTheme(
+            data: _sliderThemeData.copyWith(
+              inactiveTrackColor: Colors.transparent,
+            ),
+            child: Slider(
+              min: 0.0,
+              max: widget.duration.inMilliseconds.toDouble(),
+              value: min(_dragValue ?? widget.position.inMilliseconds.toDouble(),
+                  widget.duration.inMilliseconds.toDouble()),
+              onChanged: (value) {
+                setState(() {
+                  _dragValue = value;
+                });
+                if (widget.onChanged != null) {
+                  widget.onChanged!(Duration(milliseconds: value.round()));
+                }
+              },
+              onChangeEnd: (value) {
+                if (widget.onChangeEnd != null) {
+                  widget.onChangeEnd!(Duration(milliseconds: value.round()));
+                }
+                _dragValue = null;
+              },
+            ),
+          ),
+          Positioned(
+            right: 16.0,
+            bottom: 0.0,
+            child: Text(
+                RegExp(r'((^0*[1-9]\d*:)?\d{2}:\d{2})\.\d+$')
+                    .firstMatch("$_remaining")
+                    ?.group(1) ??
+                    '$_remaining',
+                style: Theme.of(context).textTheme.caption),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Duration get _remaining => widget.duration - widget.position;
+}
+
+class HiddenThumbComponentShape extends SliderComponentShape {
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) => Size.zero;
+
+  @override
+  void paint(
+      PaintingContext context,
+      Offset center, {
+        required Animation<double> activationAnimation,
+        required Animation<double> enableAnimation,
+        required bool isDiscrete,
+        required TextPainter labelPainter,
+        required RenderBox parentBox,
+        required SliderThemeData sliderTheme,
+        required TextDirection textDirection,
+        required double value,
+        required double textScaleFactor,
+        required Size sizeWithOverflow,
+      }) {}
+}
+
+class PositionData {
+  final Duration position;
+  final Duration bufferedPosition;
+
+  PositionData(this.position, this.bufferedPosition);
+}
